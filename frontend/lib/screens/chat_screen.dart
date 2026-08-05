@@ -73,7 +73,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         }
       });
 
-      // Listen to backend wake word event
+      // Listen to backend wake word event ("Hey Atlas")
       atlas.addListener(() {
         if (atlas.isWakeWordActive && !voice.isListening && !voice.isSpeaking && !atlas.isStreaming) {
           _addLog('🎯 BACKEND WAKE WORD DETECTED ("Hey Atlas")');
@@ -114,7 +114,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     });
   }
 
-  /// Mikrofon sadece konuşma tetiklendiğinde veya "Hey Atlas" algılandığında açılır
+  /// Mikrofon sadece kullanıcı "Hey Atlas" dediğinde veya mikrofon ikonuna tıkladığında açılır
   Future<void> _triggerListening(AtlasService atlas, VoiceService voice) async {
     if (voice.isListening || voice.isSpeaking || atlas.isStreaming) return;
 
@@ -139,25 +139,32 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _waitAndSpeakResponse(atlas, voice);
   }
 
-  void _waitAndSpeakResponse(AtlasService atlas, VoiceService voice) {
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(milliseconds: 200));
-      return atlas.isStreaming;
-    }).then((_) {
-      if (atlas.messages.isNotEmpty) {
-        final last = atlas.messages.last;
-        if (last.role == MessageRole.atlas && last.text.isNotEmpty) {
-          _addLog('ATLAS SPEAKING: "${last.text.substring(0, min(50, last.text.length))}..."');
-          voice.speak(last.text);
-        }
+  void _waitAndSpeakResponse(AtlasService atlas, VoiceService voice) async {
+    // Wait for streaming to start
+    int attempts = 0;
+    while (!atlas.isStreaming && attempts < 30) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      attempts++;
+    }
+
+    // Wait for streaming to finish
+    while (atlas.isStreaming) {
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+
+    await Future.delayed(const Duration(milliseconds: 200));
+    if (atlas.messages.isNotEmpty && mounted) {
+      final last = atlas.messages.last;
+      if (last.role == MessageRole.atlas && last.text.isNotEmpty) {
+        _addLog('ATLAS SPEAKING: "${last.text.substring(0, min(50, last.text.length))}..."');
+        await voice.speak(last.text);
+        // Returns to Standby mode (MİKROFON: BEKLEMEDE)
       }
-    });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _updateAvatarOffset());
-
     return Consumer2<AtlasService, VoiceService>(
       builder: (context, atlas, voice, _) {
         return Scaffold(
@@ -206,13 +213,33 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              // Holographic Audio Avatar Core
-                              AtlasAvatar(
-                                key: _avatarKey,
-                                isSpeaking: voice.isSpeaking || atlas.isStreaming,
-                                isListening: voice.isListening,
-                                soundLevel: voice.soundLevel,
-                                size: 240,
+                              // Holographic Audio Avatar Core (Click to speak / silence)
+                              GestureDetector(
+                                onTap: () {
+                                  if (voice.isSpeaking) {
+                                    // Konuşuyorsa sus
+                                    voice.stopSpeaking();
+                                    _addLog('> [USER] Atlas susturuldu.');
+                                  } else if (voice.isListening) {
+                                    voice.stopListening();
+                                  } else {
+                                    _triggerListening(atlas, voice);
+                                  }
+                                },
+                                child: Tooltip(
+                                  message: voice.isSpeaking
+                                      ? 'Susturmak için tıklayın'
+                                      : voice.isListening
+                                          ? 'Dinlemeyi durdurmak için tıklayın'
+                                          : 'Konuşmak için tıklayın',
+                                  child: AtlasAvatar(
+                                    key: _avatarKey,
+                                    isSpeaking: voice.isSpeaking || atlas.isStreaming,
+                                    isListening: voice.isListening,
+                                    soundLevel: voice.soundLevel,
+                                    size: 240,
+                                  ),
+                                ),
                               )
                                   .animate()
                                   .scale(
@@ -246,6 +273,17 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                 spacing: 10,
                                 runSpacing: 10,
                                 children: [
+                                  // Konuşurken büyük sustur butonu göster
+                                  if (voice.isSpeaking)
+                                    _CyberChip(
+                                      icon: Icons.volume_off_rounded,
+                                      label: '🔇 SUSTUR',
+                                      color: const Color(0xFFFF5F57),
+                                      onTap: () {
+                                        voice.stopSpeaking();
+                                        _addLog('> [USER] Atlas susturuldu.');
+                                      },
+                                    ),
                                   _CyberChip(
                                     icon: Icons.flash_on_rounded,
                                     label: '⚡ Test "Hey Atlas"',
@@ -485,8 +523,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   // ─── 2. Ambient Voice Status Banner ─────────────────────────────────
   Widget _buildVoiceStatusBanner(AtlasService atlas, VoiceService voice) {
-    String mainText = '"Hey Atlas" deyin veya Konuşun';
-    String subText = 'Konuşmaya başladığınızda mikrofon otomatik devreye girer';
+    String mainText = 'Konuşmak İçin Logoya Tıklayın';
+    String subText = 'Mikrofon kapalıdır. Tıkladığınızda 1 soru için açılır.';
     Color mainColor = AtlasColors.neonCyan;
 
     if (voice.isListening) {

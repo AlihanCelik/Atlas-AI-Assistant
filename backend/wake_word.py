@@ -38,27 +38,30 @@ class WakeWordDetector:
 
     def _simple_listen_loop(self):
         """
-        Basit mod: Ses kaydeder → speech_recognition ile metne çevirir
+        Basit mod: sounddevice ile ses kaydeder → speech_recognition ile metne çevirir
         → 'atlas' kelimesi geçiyor mu bakar.
         """
         try:
             import speech_recognition as sr
         except ImportError:
-            print("[WakeWord] speech_recognition kurulu değil: pip install SpeechRecognition")
+            print("[WakeWord] speech_recognition kurulu değil")
             return
 
         recognizer = sr.Recognizer()
-        mic = sr.Microphone()
+        sample_rate = 16000
+        duration = 3.5  # 3.5 saniyelik ses dilimleri
 
         print("[WakeWord] Dinleniyor... 'Hey Atlas' deyin.")
 
-        with mic as source:
-            recognizer.adjust_for_ambient_noise(source, duration=1)
-
         while self.is_running:
             try:
-                with mic as source:
-                    audio = recognizer.listen(source, timeout=5, phrase_time_limit=4)
+                audio_data = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='int16')
+                sd.wait()
+                if not self.is_running:
+                    break
+
+                raw_bytes = audio_data.tobytes()
+                audio = sr.AudioData(raw_bytes, sample_rate, 2)
 
                 try:
                     text = recognizer.recognize_google(audio, language="tr-TR").lower()
@@ -71,11 +74,13 @@ class WakeWordDetector:
                 except sr.UnknownValueError:
                     pass  # Anlaşılmayan ses, devam et
                 except sr.RequestError as e:
-                    print(f"[WakeWord] API hatası: {e}")
+                    print(f"[WakeWord] STT API hatası: {e}")
 
             except Exception as e:
                 if self.is_running:
                     print(f"[WakeWord] Hata: {e}")
+                    import time
+                    time.sleep(1)
 
     # ─── Porcupine Mod ────────────────────────────────────────────
     def _porcupine_listen_loop(self):

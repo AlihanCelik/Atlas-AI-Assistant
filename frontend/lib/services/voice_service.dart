@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -32,19 +34,11 @@ class VoiceService extends ChangeNotifier {
     }
 
     try {
-      final status = await _channel
-          .invokeMethod<String>('requestPermissions')
-          .timeout(
-            const Duration(seconds: 2),
-            onTimeout: () => 'authorized',
-          );
+      _channel.setMethodCallHandler(_handleNativeCall);
+      final status = await _channel.invokeMethod<String>('requestPermissions');
       debugPrint('[Voice] İzin durumu: $status');
-      _permissionGranted = status == 'authorized';
+      _permissionGranted = true;
       _initialized = true;
-
-      if (_permissionGranted) {
-        _channel.setMethodCallHandler(_handleNativeCall);
-      }
     } catch (e) {
       debugPrint('[Voice] İzin kontrolü uyarısı: $e');
       _initialized = true;
@@ -57,15 +51,17 @@ class VoiceService extends ChangeNotifier {
   Future<void> _handleNativeCall(MethodCall call) async {
     switch (call.method) {
       case 'onResult':
-        final args = call.arguments as Map;
-        final text = args['text'] as String? ?? '';
-        final isFinal = args['final'] as bool? ?? false;
-        _lastWords = text;
-        if (isFinal) {
-          _isListening = false;
-          _soundLevel = 0.0;
+        if (call.arguments is Map) {
+          final args = call.arguments as Map;
+          final text = args['text']?.toString() ?? '';
+          final isFinal = args['final'] == true;
+          _lastWords = text;
+          if (isFinal) {
+            _isListening = false;
+            _soundLevel = 0.0;
+          }
+          notifyListeners();
         }
-        notifyListeners();
         break;
 
       case 'onSoundLevel':
@@ -87,27 +83,47 @@ class VoiceService extends ChangeNotifier {
   Future<void> startListening({required Function(String) onResult}) async {
     if (!_permissionGranted) {
       await initialize();
-      if (!_permissionGranted) return;
     }
     if (_isListening) return;
 
     _lastWords = '';
     _isListening = true;
-    _soundLevel = 0.3;
+    _soundLevel = 0.6;
     notifyListeners();
 
     debugPrint('[Voice] Dinleme başladı');
 
     try {
       final result = await _channel.invokeMethod<String>('startListening');
-      debugPrint('[Voice] Sonuç: "$result"');
+      debugPrint('[Voice] Native STT Sonucu: "$result"');
+
+      if (result != null && result.isNotEmpty) {
+        _lastWords = result;
+        _isListening = false;
+        _soundLevel = 0.0;
+        notifyListeners();
+        onResult(result);
+        return;
+      }
+
+      // Native STT empty -> Use Backend Python STT Fallback
+      debugPrint('[Voice] Native STT boş döndü, Backend Türkçe STT çağrılıyor...');
+      final response = await http.post(Uri.parse('http://localhost:8000/api/stt')).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => http.Response('{"text":""}', 200),
+      );
 
       _isListening = false;
       _soundLevel = 0.0;
 
-      if (result != null && result.isNotEmpty) {
-        _lastWords = result;
-        onResult(result);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final sttText = data['text'] as String? ?? '';
+        debugPrint('[Voice] Backend STT Sonucu: "$sttText"');
+        if (sttText.isNotEmpty) {
+          _lastWords = sttText;
+          onResult(sttText);
+        }
       }
       notifyListeners();
     } catch (e) {

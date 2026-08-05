@@ -14,6 +14,9 @@ from pydantic import BaseModel
 
 from model import atlas_model
 from wake_word import WakeWordDetector
+from system_control import SystemController
+
+sys_controller = SystemController()
 
 
 # ─── WebSocket Bağlantı Yöneticisi ────────────────────────────────
@@ -69,12 +72,8 @@ async def lifespan(app: FastAPI):
     else:
         print("[Atlas] ⚠️  Ollama bulunamadı! `ollama serve` çalıştırın.")
 
-    # Wake word dinleyiciyi başlat
-    wake_detector = WakeWordDetector(
-        callback=on_wake_word,
-        use_simple_mode=True  # pvporcupine yoksa basit mod
-    )
-    wake_detector.start()
+    # Wake detector pasif (macOS turuncu mikrofon simgesini engellemek için)
+    wake_detector = None
 
     yield
 
@@ -180,6 +179,21 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg_type == "chat":
                 user_message = payload.get("message", "")
 
+                # 1. macOS Sistem Komutları Denetimi (Google Chrome aç, Aşağı kaydır, Dur vb.)
+                is_sys_cmd, sys_resp = sys_controller.process_command(user_message)
+                if is_sys_cmd and sys_resp:
+                    print(f"[SystemControl] Komut çalıştırıldı: '{user_message}' -> '{sys_resp}'")
+                    await websocket.send_text(json.dumps({"type": "stream_start"}))
+                    await websocket.send_text(json.dumps({
+                        "type": "stream_token",
+                        "token": sys_resp
+                    }))
+                    await websocket.send_text(json.dumps({
+                        "type": "stream_end",
+                        "full_response": sys_resp
+                    }))
+                    continue
+
                 if not atlas_model.check_ollama():
                     await websocket.send_text(json.dumps({
                         "type": "error",
@@ -218,6 +232,30 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"[WS] Hata: {e}")
         manager.disconnect(websocket)
+
+
+@app.post("/api/stt")
+def speech_to_text_fallback():
+    """Yedek Türkçe Ses Tanıma Endpoint'i (sounddevice + speech_recognition)"""
+    try:
+        import sounddevice as sd
+        import speech_recognition as sr
+
+        sample_rate = 16000
+        duration = 3.5
+        print("[STT-API] 🎙️ Türkçe ses dinleniyor (3.5 sn)...")
+        audio_data = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='int16')
+        sd.wait()
+        raw_bytes = audio_data.tobytes()
+        audio = sr.AudioData(raw_bytes, sample_rate, 2)
+
+        recognizer = sr.Recognizer()
+        text = recognizer.recognize_google(audio, language="tr-TR")
+        print(f"[STT-API] 🎯 Algılanan Türkçe Metin: {text}")
+        return {"text": text}
+    except Exception as e:
+        print(f"[STT-API] Ses algılanamadı veya hata: {e}")
+        return {"text": ""}
 
 
 # ─── Çalıştırma ───────────────────────────────────────────────────

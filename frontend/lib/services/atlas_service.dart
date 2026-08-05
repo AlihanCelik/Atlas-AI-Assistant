@@ -10,9 +10,9 @@ class AtlasService extends ChangeNotifier {
   static const String _wsUrl = 'ws://localhost:8000/ws';
 
   static const List<String> availableModels = [
+    'qwen2.5:1.5b',
     'llama3.2:3b',
     'llama3.1:8b',
-    'qwen2:1.5b',
     'mistral:7b',
     'phi3:mini',
   ];
@@ -21,7 +21,7 @@ class AtlasService extends ChangeNotifier {
   bool _isConnected = false;
   bool _isStreaming = false;
   bool _isWakeWordActive = false;
-  String _currentModel = 'llama3.2:3b';
+  String _currentModel = 'qwen2.5:1.5b';
 
   String get currentModel => _currentModel;
 

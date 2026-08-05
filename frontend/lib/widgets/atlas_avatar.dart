@@ -2,311 +2,252 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../theme/atlas_theme.dart';
 
-/// Konuşan Atlas avatarı — ses dalgası + orbit halkalar
+/// 3D Holographic AI Core Emblem Avatar
 class AtlasAvatar extends StatefulWidget {
-  final bool isSpeaking;   // Atlas yanıt verirken
-  final bool isListening;  // Kullanıcı konuşurken / wake word
-  final double soundLevel; // 0.0–1.0 mikrofon seviyesi
+  final bool isSpeaking;
+  final bool isListening;
+  final double soundLevel;
   final double size;
+  final VoidCallback? onTap;
 
   const AtlasAvatar({
     super.key,
     this.isSpeaking = false,
     this.isListening = false,
     this.soundLevel = 0.0,
-    this.size = 180,
+    this.size = 200,
+    this.onTap,
   });
 
   @override
   State<AtlasAvatar> createState() => _AtlasAvatarState();
 }
 
-class _AtlasAvatarState extends State<AtlasAvatar>
-    with TickerProviderStateMixin {
-  late AnimationController _pulseCtrl;
-  late AnimationController _orbitCtrl;
-  late AnimationController _waveCtrl;
+class _AtlasAvatarState extends State<AtlasAvatar> with TickerProviderStateMixin {
   late AnimationController _idleCtrl;
+  late AnimationController _ringCtrl;
 
   @override
   void initState() {
     super.initState();
-
-    _pulseCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1600),
-    )..repeat(reverse: true);
-
-    _orbitCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 8),
-    )..repeat();
-
-    _waveCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 400),
-    )..repeat(reverse: true);
-
     _idleCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 3),
+      duration: const Duration(milliseconds: 2400),
     )..repeat(reverse: true);
+
+    _ringCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 4000),
+    )..repeat();
   }
 
   @override
   void dispose() {
-    _pulseCtrl.dispose();
-    _orbitCtrl.dispose();
-    _waveCtrl.dispose();
     _idleCtrl.dispose();
+    _ringCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final s = widget.size;
-    final active = widget.isSpeaking || widget.isListening;
-    final level = widget.soundLevel;
+    final active = widget.isListening || widget.isSpeaking;
+    final level = widget.soundLevel.clamp(0.0, 1.0);
 
-    return SizedBox(
-      width: s,
-      height: s,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // ── Dış ses halkası (ses seviyesine göre büyür) ──────
-          AnimatedBuilder(
-            animation: _pulseCtrl,
-            builder: (_, __) {
-              final extra = active ? level * s * 0.25 : 0.0;
-              final pulse = _pulseCtrl.value * (active ? 0.06 : 0.03);
-              return Container(
-                width: s * 0.88 + extra + pulse * s,
-                height: s * 0.88 + extra + pulse * s,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: SizedBox(
+          width: s,
+          height: s,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // ── Arka plan halkaları (Pulsing Sonar Rings) ────────
+              AnimatedBuilder(
+                animation: _ringCtrl,
+                builder: (_, __) {
+                  return CustomPaint(
+                    size: Size(s, s),
+                    painter: _AvatarRingsPainter(
+                      progress: _ringCtrl.value,
+                      isListening: widget.isListening,
+                      isSpeaking: widget.isSpeaking,
+                      soundLevel: level,
+                    ),
+                  );
+                },
+              ),
+
+              // ── Ses Dalgası (Equalizer Bars) ──────────────────────
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 300),
+                opacity: active ? 1.0 : 0.2,
+                child: SizedBox(
+                  width: s * 0.76,
+                  height: s * 0.76,
+                  child: _EqualizerRing(
+                    color: widget.isListening
+                        ? AtlasColors.neonGreen
+                        : AtlasColors.neonCyan,
+                    barCount: 9,
+                    intensity: active ? (0.4 + level * 0.6) : 0.0,
+                  ),
+                ),
+              ),
+
+              // ── Ana 3D Yapay Zeka Çekirdek Logosu ───────────────────
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                width: s * 0.52,
+                height: s * 0.52,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: widget.isListening
+                        ? [AtlasColors.neonGreen, const Color(0xFF064E3B)]
+                        : widget.isSpeaking
+                            ? [AtlasColors.neonCyan, AtlasColors.neonPurple]
+                            : [AtlasColors.neonPurple, const Color(0xFF5B21B6)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                   boxShadow: [
                     BoxShadow(
-                      color: widget.isListening
-                          ? AtlasColors.neonGreen.withOpacity(0.35 + level * 0.3)
-                          : widget.isSpeaking
-                              ? AtlasColors.neonCyan.withOpacity(0.3 + _pulseCtrl.value * 0.2)
-                              : AtlasColors.neonPurple.withOpacity(0.15 + _pulseCtrl.value * 0.1),
-                      blurRadius: 36 + level * 30,
-                      spreadRadius: 4,
+                      color: (widget.isListening
+                              ? AtlasColors.neonGreen
+                              : AtlasColors.neonPurple)
+                          .withOpacity(0.7),
+                      blurRadius: 24,
+                      spreadRadius: 2,
                     ),
                   ],
                 ),
-              );
-            },
-          ),
-
-          // ── Orbit 1 ──────────────────────────────────────────
-          AnimatedBuilder(
-            animation: _orbitCtrl,
-            builder: (_, __) => Transform.rotate(
-              angle: _orbitCtrl.value * 2 * pi,
-              child: CustomPaint(
-                size: Size(s * 0.90, s * 0.90),
-                painter: _OrbitPainter(
-                  color: (widget.isListening
-                          ? AtlasColors.neonGreen
-                          : AtlasColors.neonPurple)
-                      .withOpacity(0.30),
-                  dotColor: AtlasColors.neonCyan,
-                  dotCount: 3,
+                child: Center(
+                  child: ClipOval(
+                    child: AnimatedBuilder(
+                      animation: _idleCtrl,
+                      builder: (_, __) {
+                        final scale = 1.0 + (active ? level * 0.15 : _idleCtrl.value * 0.04);
+                        return Transform.scale(
+                          scale: scale,
+                          child: Image.asset(
+                            'assets/ai_core_logo.png',
+                            width: s * 0.50,
+                            height: s * 0.50,
+                            fit: BoxFit.cover,
+                            errorBuilder: (ctx, err, stack) => Icon(
+                              Icons.psychology_rounded,
+                              size: s * 0.28,
+                              color: Colors.white,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                 ),
               ),
-            ),
+            ],
           ),
-
-          // ── Orbit 2 (ters) ───────────────────────────────────
-          AnimatedBuilder(
-            animation: _orbitCtrl,
-            builder: (_, __) => Transform.rotate(
-              angle: -_orbitCtrl.value * 2 * pi * 0.6,
-              child: CustomPaint(
-                size: Size(s * 0.75, s * 0.75),
-                painter: _OrbitPainter(
-                  color: AtlasColors.neonCyan.withOpacity(0.18),
-                  dotColor: widget.isSpeaking
-                      ? AtlasColors.neonCyan
-                      : AtlasColors.neonPurple,
-                  dotCount: 2,
-                ),
-              ),
-            ),
-          ),
-
-          // ── Ses dalgası (aktif durumlarda) ───────────────────
-          AnimatedBuilder(
-            animation: _waveCtrl,
-            builder: (_, __) => CustomPaint(
-              size: Size(s * 0.62, s * 0.62),
-              painter: _WavePainter(
-                progress: _waveCtrl.value,
-                color: widget.isListening
-                    ? AtlasColors.neonGreen
-                    : AtlasColors.neonCyan,
-                barCount: 9,
-                intensity: active ? (0.4 + level * 0.6) : 0.0,
-              ),
-            ),
-          ),
-
-          // ── Ana çember ───────────────────────────────────────
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            width: s * 0.50,
-            height: s * 0.50,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                colors: widget.isListening
-                    ? [AtlasColors.neonGreen, const Color(0xFF064E3B)]
-                    : widget.isSpeaking
-                        ? [AtlasColors.neonCyan, AtlasColors.neonPurple]
-                        : [AtlasColors.neonPurple, const Color(0xFF5B21B6)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: (widget.isListening
-                          ? AtlasColors.neonGreen
-                          : AtlasColors.neonPurple)
-                      .withOpacity(0.7),
-                  blurRadius: 20,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-            child: Center(
-              child: ClipOval(
-                child: AnimatedBuilder(
-                  animation: _idleCtrl,
-                  builder: (_, __) {
-                    final scale = 1.0 + (active ? level * 0.15 : _idleCtrl.value * 0.04);
-                    return Transform.scale(
-                      scale: scale,
-                      child: Image.asset(
-                        'assets/ai_core_logo.png',
-                        width: s * 0.48,
-                        height: s * 0.48,
-                        fit: BoxFit.cover,
-                        errorBuilder: (ctx, err, stack) => Icon(
-                          Icons.psychology_rounded,
-                          size: s * 0.28,
-                          color: Colors.white,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-// ─── Orbit halkası ────────────────────────────────────────────────
-class _OrbitPainter extends CustomPainter {
-  final Color color;
-  final Color dotColor;
-  final int dotCount;
+class _AvatarRingsPainter extends CustomPainter {
+  final double progress;
+  final bool isListening;
+  final bool isSpeaking;
+  final double soundLevel;
 
-  _OrbitPainter({
-    required this.color,
-    required this.dotColor,
-    required this.dotCount,
+  _AvatarRingsPainter({
+    required this.progress,
+    required this.isListening,
+    required this.isSpeaking,
+    required this.soundLevel,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2;
+    final maxR = size.width * 0.46;
 
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1.0
-      ..style = PaintingStyle.stroke;
+    final color = isListening
+        ? AtlasColors.neonGreen
+        : isSpeaking
+            ? AtlasColors.neonCyan
+            : AtlasColors.neonPurple;
 
-    const dashCount = 40;
-    const step = 2 * pi / dashCount;
-    for (int i = 0; i < dashCount; i++) {
-      final a = i * step;
-      canvas.drawArc(
-        Rect.fromCircle(center: center, radius: radius),
-        a,
-        step * 0.45,
-        false,
-        paint,
-      );
-    }
+    for (int i = 0; i < 3; i++) {
+      final p = (progress + i / 3.0) % 1.0;
+      final r = maxR * 0.45 + p * (maxR * 0.55);
+      final opacity = (1.0 - p) * (isListening ? 0.6 : 0.3) * (1.0 + soundLevel * 0.5);
 
-    final dotPaint = Paint()..color = dotColor;
-    final glowPaint = Paint()
-      ..color = dotColor.withOpacity(0.35)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+      final paint = Paint()
+        ..color = color.withOpacity(opacity.clamp(0.0, 1.0))
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5 + (1.0 - p) * 1.5;
 
-    for (int i = 0; i < dotCount; i++) {
-      final angle = (i / dotCount) * 2 * pi;
-      final x = center.dx + radius * cos(angle);
-      final y = center.dy + radius * sin(angle);
-      canvas.drawCircle(Offset(x, y), 4, glowPaint);
-      canvas.drawCircle(Offset(x, y), 2.5, dotPaint);
+      canvas.drawCircle(center, r, paint);
     }
   }
 
   @override
-  bool shouldRepaint(_OrbitPainter old) => old.color != color;
+  bool shouldRepaint(_AvatarRingsPainter old) => true;
 }
 
-// ─── Ses dalgası ──────────────────────────────────────────────────
-class _WavePainter extends CustomPainter {
-  final double progress;
+class _EqualizerRing extends StatelessWidget {
   final Color color;
   final int barCount;
-  final double intensity; // 0.0 = gizli, 1.0 = tam
+  final double intensity;
 
-  _WavePainter({
-    required this.progress,
+  const _EqualizerRing({
     required this.color,
     required this.barCount,
     required this.intensity,
   });
 
   @override
-  void paint(Canvas canvas, Size size) {
-    if (intensity < 0.01) return;
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (ctx, constraints) {
+      final size = constraints.maxWidth;
+      final center = size / 2;
+      final radius = size * 0.42;
 
-    final paint = Paint()
-      ..strokeWidth = 2.5
-      ..strokeCap = StrokeCap.round;
+      return Stack(
+        children: List.generate(barCount, (i) {
+          final angle = (2 * pi / barCount) * i;
+          final barH = 6.0 + (sin(i * 1.5 + intensity * 6) + 1) * 8.0 * (0.3 + intensity * 0.7);
+          final x = center + radius * cos(angle) - 2;
+          final y = center + radius * sin(angle) - barH / 2;
 
-    final barW = size.width / (barCount * 2.2);
-    final centerY = size.height / 2;
-
-    for (int i = 0; i < barCount; i++) {
-      final x = barW * (i * 2.2 + 1.1);
-      final phase = (i / barCount) * pi * 2 + progress * pi * 2;
-      final heightFactor = (0.15 + sin(phase).abs() * 0.85) * intensity;
-      final barH = (size.height * 0.45) * heightFactor;
-
-      final alpha = 0.5 + (i / barCount) * 0.5;
-      paint.color = color.withOpacity(alpha * intensity);
-
-      canvas.drawLine(
-        Offset(x, centerY - barH),
-        Offset(x, centerY + barH),
-        paint,
+          return Positioned(
+            left: x,
+            top: y,
+            child: Transform.rotate(
+              angle: angle + pi / 2,
+              child: Container(
+                width: 3.5,
+                height: barH,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withOpacity(0.8),
+                      blurRadius: 6,
+                    )
+                  ],
+                ),
+              ),
+            ),
+          );
+        }),
       );
-    }
+    });
   }
-
-  @override
-  bool shouldRepaint(_WavePainter old) => true;
 }
