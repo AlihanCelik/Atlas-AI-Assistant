@@ -39,21 +39,35 @@ class AtlasService extends ChangeNotifier {
 
   // ─── WebSocket Bağlantısı ─────────────────────────────────────
   Future<void> connect() async {
+    _isConnected = false;
+    notifyListeners();
+
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(_wsUrl));
-      _isConnected = true;
+      // Quick check if http backend is available
+      final response = await http
+          .get(Uri.parse('$_baseUrl/status'))
+          .timeout(const Duration(milliseconds: 1200));
 
-      _channel!.stream.listen(
-        _onMessage,
-        onError: _onError,
-        onDone: _onDisconnect,
-      );
-
-      notifyListeners();
-      debugPrint('[Atlas] WebSocket bağlandı.');
+      if (response.statusCode == 200) {
+        _channel = WebSocketChannel.connect(Uri.parse(_wsUrl));
+        _channel!.stream.listen(
+          _onMessage,
+          onError: (err) {
+            _isConnected = false;
+            debugPrint('[Atlas] WS Hatası: $err');
+            notifyListeners();
+          },
+          onDone: _onDisconnect,
+          cancelOnError: true,
+        );
+        _isConnected = true;
+        notifyListeners();
+        debugPrint('[Atlas] WebSocket başarıyla bağlandı.');
+        return;
+      }
     } catch (e) {
       _isConnected = false;
-      debugPrint('[Atlas] Bağlantı hatası: $e');
+      debugPrint('[Atlas] Backend kapalı. Çevrimdışı Test Modu (Offline UI Test).');
       notifyListeners();
     }
   }
@@ -85,7 +99,7 @@ class AtlasService extends ChangeNotifier {
         'message': text,
       }));
     } else {
-      // Fallback: REST API
+      // Offline UI Demo Mode
       await _sendViaRest(text);
     }
   }
@@ -96,7 +110,7 @@ class AtlasService extends ChangeNotifier {
         Uri.parse('$_baseUrl/chat'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'message': text}),
-      );
+      ).timeout(const Duration(seconds: 2));
 
       if (response.statusCode == 200) {
         final data = json.decode(utf8.decode(response.bodyBytes));
@@ -105,7 +119,24 @@ class AtlasService extends ChangeNotifier {
         _finishStreaming('Hata: ${response.statusCode}');
       }
     } catch (e) {
-      _finishStreaming('Backend\'e bağlanılamadı. Sunucunun çalıştığından emin olun.');
+      // Stream mock demo text character by character for offline UI testing
+      final demoText = 'Merhaba Alihan! Arka plan sunucusu henüz başlatılmadı ancak ön yüz arayüzü, siber pencereler, terminal logları ve ses sistemi aktif modda çalışıyor. Backend\'i başlatmak için terminalden `./start.sh` veya `cd backend && python main.py` komutunu verebilirsin.';
+      _streamingBuffer = '';
+      for (int i = 0; i < demoText.length; i++) {
+        await Future.delayed(const Duration(milliseconds: 20));
+        final char = demoText[i];
+        _streamingBuffer += char;
+        _tokenController.add(char);
+        if (messages.isNotEmpty && messages.last.role == MessageRole.atlas) {
+          messages.last = ChatMessage(
+            role: MessageRole.atlas,
+            text: _streamingBuffer,
+            isLoading: false,
+          );
+          notifyListeners();
+        }
+      }
+      _finishStreaming(_streamingBuffer);
     }
   }
 

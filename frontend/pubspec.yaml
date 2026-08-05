@@ -14,9 +14,6 @@ dependencies:
   web_socket_channel: ^2.4.0
   http: ^1.2.1
 
-  # Ses — konuşma tanıma
-  speech_to_text: ^6.6.2
-
   # Animasyonlar
   lottie: ^3.1.2
   flutter_animate: ^4.5.0

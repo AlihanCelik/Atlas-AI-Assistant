@@ -182,23 +182,26 @@ class _AtlasAvatarState extends State<AtlasAvatar>
               ],
             ),
             child: Center(
-              child: AnimatedBuilder(
-                animation: _idleCtrl,
-                builder: (_, __) => Text(
-                  widget.isListening ? '◉' : 'A',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: widget.isListening ? s * 0.18 : s * 0.22,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -1,
-                    shadows: [
-                      Shadow(
-                        color: AtlasColors.neonCyan.withOpacity(
-                            0.6 + _idleCtrl.value * 0.4),
-                        blurRadius: 14,
+              child: ClipOval(
+                child: AnimatedBuilder(
+                  animation: _idleCtrl,
+                  builder: (_, __) {
+                    final scale = 1.0 + (active ? level * 0.15 : _idleCtrl.value * 0.04);
+                    return Transform.scale(
+                      scale: scale,
+                      child: Image.asset(
+                        'assets/ai_core_logo.png',
+                        width: s * 0.48,
+                        height: s * 0.48,
+                        fit: BoxFit.cover,
+                        errorBuilder: (ctx, err, stack) => Icon(
+                          Icons.psychology_rounded,
+                          size: s * 0.28,
+                          color: Colors.white,
+                        ),
                       ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
               ),
             ),

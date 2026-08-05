@@ -1,175 +1,162 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:speech_to_text/speech_to_text.dart';
+import 'package:flutter/services.dart';
 
-/// Sesli konuşma servisi
-/// - speech_to_text  → mikrofon → metin
-/// - macOS `say`     → metin → ses (TTS)
+/// Sesli konuşma servisi — macOS native SFSpeechRecognizer + NSSpeechSynthesizer
 class VoiceService extends ChangeNotifier {
-  final SpeechToText _stt = SpeechToText();
+  static const _channel = MethodChannel('com.atlas.atlasApp/voice');
 
-  bool _sttAvailable = false;
   bool _isListening = false;
   bool _isSpeaking = false;
-  bool _permissionDenied = false;
-  String _lastWords = '';
+  bool _permissionGranted = false;
+  bool _initialized = false;
   double _soundLevel = 0.0;
-  Process? _sayProcess;
+  String _lastWords = '';
 
   bool get isListening => _isListening;
   bool get isSpeaking => _isSpeaking;
-  bool get isAvailable => _sttAvailable;
-  bool get permissionDenied => _permissionDenied;
-  String get lastWords => _lastWords;
+  bool get isAvailable => _permissionGranted && _initialized;
+  bool get permissionDenied => _initialized && !_permissionGranted;
   double get soundLevel => _soundLevel;
+  String get lastWords => _lastWords;
 
-  /// Başlangıçta initialize — izin iste
   Future<void> initialize() async {
-    debugPrint('[Voice] STT initialize başlıyor...');
-    try {
-      _sttAvailable = await _stt.initialize(
-        onStatus: _onSttStatus,
-        onError: (e) {
-          debugPrint('[Voice] STT hata: ${e.errorMsg} | permanent: ${e.permanent}');
-          if (e.permanent) {
-            _permissionDenied = true;
-            notifyListeners();
-          }
-        },
-        debugLogging: true,
-      );
-      debugPrint('[Voice] STT hazır: $_sttAvailable');
+    if (_initialized) return;
+    debugPrint('[Voice] İzinler kontrol ediliyor...');
 
-      if (_sttAvailable) {
-        // Mevcut locale'leri listele
-        final locales = await _stt.locales();
-        debugPrint('[Voice] Mevcut diller: ${locales.map((l) => l.localeId).join(', ')}');
+    if (kIsWeb || !(Platform.isMacOS || Platform.isIOS)) {
+      _initialized = true;
+      _permissionGranted = true;
+      notifyListeners();
+      return;
+    }
+
+    try {
+      final status = await _channel
+          .invokeMethod<String>('requestPermissions')
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => 'authorized',
+          );
+      debugPrint('[Voice] İzin durumu: $status');
+      _permissionGranted = status == 'authorized';
+      _initialized = true;
+
+      if (_permissionGranted) {
+        _channel.setMethodCallHandler(_handleNativeCall);
       }
     } catch (e) {
-      debugPrint('[Voice] initialize hatası: $e');
-      _sttAvailable = false;
+      debugPrint('[Voice] İzin kontrolü uyarısı: $e');
+      _initialized = true;
+      _permissionGranted = true;
     }
+
     notifyListeners();
   }
 
-  // ─── Mikrofon Dinle ────────────────────────────────────────────
-  Future<void> startListening({required Function(String) onResult}) async {
-    if (!_sttAvailable) {
-      debugPrint('[Voice] STT hazır değil, tekrar initialize deneniyor...');
-      await initialize();
-      if (!_sttAvailable) return;
-    }
+  Future<void> _handleNativeCall(MethodCall call) async {
+    switch (call.method) {
+      case 'onResult':
+        final args = call.arguments as Map;
+        final text = args['text'] as String? ?? '';
+        final isFinal = args['final'] as bool? ?? false;
+        _lastWords = text;
+        if (isFinal) {
+          _isListening = false;
+          _soundLevel = 0.0;
+        }
+        notifyListeners();
+        break;
 
+      case 'onSoundLevel':
+        final level = (call.arguments as num?)?.toDouble() ?? 0.0;
+        _soundLevel = level.clamp(0.0, 1.0);
+        notifyListeners();
+        break;
+
+      case 'onError':
+        debugPrint('[Voice] STT hata: ${call.arguments}');
+        _isListening = false;
+        _soundLevel = 0.0;
+        notifyListeners();
+        break;
+    }
+  }
+
+  // ─── Dinlemeye Başla ──────────────────────────────────────────
+  Future<void> startListening({required Function(String) onResult}) async {
+    if (!_permissionGranted) {
+      await initialize();
+      if (!_permissionGranted) return;
+    }
     if (_isListening) return;
 
     _lastWords = '';
     _isListening = true;
+    _soundLevel = 0.3;
     notifyListeners();
 
     debugPrint('[Voice] Dinleme başladı');
 
-    // Türkçe varsa kullan, yoksa varsayılan
-    final locales = await _stt.locales();
-    final hasTr = locales.any((l) => l.localeId.startsWith('tr'));
-    final locale = hasTr ? 'tr_TR' : '';
-    debugPrint('[Voice] Kullanılan locale: ${locale.isEmpty ? "varsayılan" : locale}');
+    try {
+      final result = await _channel.invokeMethod<String>('startListening');
+      debugPrint('[Voice] Sonuç: "$result"');
 
-    await _stt.listen(
-      onResult: (result) {
-        _lastWords = result.recognizedWords;
-        debugPrint('[Voice] Tanınan: "$_lastWords" | final: ${result.finalResult}');
-        notifyListeners();
+      _isListening = false;
+      _soundLevel = 0.0;
 
-        if (result.finalResult && _lastWords.isNotEmpty) {
-          onResult(_lastWords);
-          stopListening();
-        }
-      },
-      listenFor: const Duration(seconds: 20),
-      pauseFor: const Duration(seconds: 2),
-      localeId: hasTr ? 'tr_TR' : null,
-      listenMode: ListenMode.confirmation,
-      onSoundLevelChange: (level) {
-        _soundLevel = ((level + 2.0) / 12.0).clamp(0.0, 1.0);
-        notifyListeners();
-      },
-    );
-  }
-
-  Future<void> stopListening() async {
-    await _stt.stop();
-    _isListening = false;
-    _soundLevel = 0.0;
-    notifyListeners();
-    debugPrint('[Voice] Dinleme durduruldu');
-  }
-
-  void _onSttStatus(String status) {
-    debugPrint('[Voice] STT durum: $status');
-    if (status == 'done' || status == 'notListening') {
-      if (_isListening) {
-        _isListening = false;
-        _soundLevel = 0.0;
-        notifyListeners();
+      if (result != null && result.isNotEmpty) {
+        _lastWords = result;
+        onResult(result);
       }
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[Voice] Dinleme hatası: $e');
+      _isListening = false;
+      _soundLevel = 0.0;
+      notifyListeners();
     }
   }
 
-  // ─── TTS (macOS say komutu) ────────────────────────────────────
+  Future<void> stopListening() async {
+    try {
+      await _channel.invokeMethod('stopListening');
+    } catch (_) {}
+    _isListening = false;
+    _soundLevel = 0.0;
+    notifyListeners();
+  }
+
+  // ─── TTS ──────────────────────────────────────────────────────
   Future<void> speak(String text) async {
     if (text.isEmpty) return;
-    await stopSpeaking();
-
     final clean = _cleanForSpeech(text);
     if (clean.isEmpty) return;
 
     _isSpeaking = true;
     notifyListeners();
-    debugPrint('[Voice] TTS başlıyor: "${clean.substring(0, clean.length.clamp(0, 50))}..."');
 
-    // Mevcut Türkçe sesleri dene
-    final voices = ['Yelda', 'Siri', 'Samantha'];
-    bool started = false;
-
-    for (final voice in voices) {
-      try {
-        _sayProcess = await Process.start('say', ['-v', voice, '-r', '175', clean]);
-        started = true;
-        debugPrint('[Voice] TTS sesi: $voice');
-        break;
-      } catch (_) {
-        continue;
-      }
+    try {
+      await _channel.invokeMethod('speak', clean);
+      // NSSpeechSynthesizer async çalışır, bitmesini takip edemeyiz
+      // Yaklaşık süre hesapla
+      final words = clean.split(' ').length;
+      final durationMs = (words / 2.5 * 1000).toInt().clamp(1000, 30000);
+      await Future.delayed(Duration(milliseconds: durationMs));
+    } catch (e) {
+      debugPrint('[Voice] TTS hatası: $e');
     }
 
-    if (!started) {
-      try {
-        _sayProcess = await Process.start('say', ['-r', '175', clean]);
-      } catch (e) {
-        debugPrint('[Voice] TTS başlatılamadı: $e');
-        _isSpeaking = false;
-        notifyListeners();
-        return;
-      }
-    }
-
-    _sayProcess!.exitCode.then((_) {
-      _isSpeaking = false;
-      _sayProcess = null;
-      notifyListeners();
-      debugPrint('[Voice] TTS tamamlandı');
-    });
+    _isSpeaking = false;
+    notifyListeners();
   }
 
   Future<void> stopSpeaking() async {
-    if (_sayProcess != null) {
-      _sayProcess!.kill();
-      _sayProcess = null;
-    }
-    if (_isSpeaking) {
-      _isSpeaking = false;
-      notifyListeners();
-    }
+    try {
+      await _channel.invokeMethod('stopSpeaking');
+    } catch (_) {}
+    _isSpeaking = false;
+    notifyListeners();
   }
 
   String _cleanForSpeech(String text) {
@@ -188,8 +175,8 @@ class VoiceService extends ChangeNotifier {
 
   @override
   void dispose() {
-    _stt.cancel();
-    _sayProcess?.kill();
+    stopSpeaking();
+    stopListening();
     super.dispose();
   }
 }
