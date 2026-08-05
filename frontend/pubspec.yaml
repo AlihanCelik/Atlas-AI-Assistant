@@ -1,0 +1,43 @@
+name: atlas_app
+description: Atlas - Kişisel AI Asistan
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # WebSocket + HTTP
+  web_socket_channel: ^2.4.0
+  http: ^1.2.1
+
+  # Ses — konuşma tanıma
+  speech_to_text: ^6.6.2
+
+  # Animasyonlar
+  lottie: ^3.1.2
+  flutter_animate: ^4.5.0
+
+  # State management
+  provider: ^6.1.2
+
+  # UI
+  google_fonts: ^6.2.1
+  flutter_markdown: ^0.6.22
+  cupertino_icons: ^1.0.8
+
+  # Masaüstü pencere boyutu
+  window_manager: ^0.3.9
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/

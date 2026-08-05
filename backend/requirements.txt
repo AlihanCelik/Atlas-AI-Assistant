@@ -1,0 +1,17 @@
+fastapi==0.111.0
+uvicorn==0.30.1
+pydantic==2.7.4
+requests==2.32.3
+pvporcupine==3.0.2
+pyaudio==0.2.14
+sounddevice==0.4.7
+numpy==1.26.4
+transformers==4.42.3
+torch==2.3.1
+datasets==2.20.0
+peft==0.11.1
+trl==0.9.4
+accelerate==0.31.0
+ollama==0.2.1
+python-multipart==0.0.9
+websockets==12.0
