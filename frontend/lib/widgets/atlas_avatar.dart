@@ -9,6 +9,8 @@ class AtlasAvatar extends StatefulWidget {
   final double soundLevel;
   final double size;
   final VoidCallback? onTap;
+  final GestureLongPressStartCallback? onLongPressStart;
+  final GestureLongPressEndCallback? onLongPressEnd;
 
   const AtlasAvatar({
     super.key,
@@ -17,6 +19,8 @@ class AtlasAvatar extends StatefulWidget {
     this.soundLevel = 0.0,
     this.size = 200,
     this.onTap,
+    this.onLongPressStart,
+    this.onLongPressEnd,
   });
 
   @override
@@ -59,13 +63,15 @@ class _AtlasAvatarState extends State<AtlasAvatar> with TickerProviderStateMixin
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
+        onLongPressStart: widget.onLongPressStart,
+        onLongPressEnd: widget.onLongPressEnd,
         child: SizedBox(
           width: s,
           height: s,
           child: Stack(
             alignment: Alignment.center,
             children: [
-              // ── Arka plan halkaları (Pulsing Sonar Rings) ────────
+              // ── Logo Etrafındaki Halkalar (Pulsing Sonar Rings around logo) ────────
               AnimatedBuilder(
                 animation: _ringCtrl,
                 builder: (_, __) {
@@ -221,7 +227,8 @@ class _EqualizerRing extends StatelessWidget {
       return Stack(
         children: List.generate(barCount, (i) {
           final angle = (2 * pi / barCount) * i;
-          final barH = 6.0 + (sin(i * 1.5 + intensity * 6) + 1) * 8.0 * (0.3 + intensity * 0.7);
+          final voiceAmp = (intensity * 2.2).clamp(0.0, 1.0);
+          final barH = 5.0 + (voiceAmp * 22.0) * (0.5 + 0.5 * sin(i * 1.5));
           final x = center + radius * cos(angle) - 2;
           final y = center + radius * sin(angle) - barH / 2;
 

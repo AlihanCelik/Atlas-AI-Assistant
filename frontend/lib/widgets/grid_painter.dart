@@ -39,19 +39,6 @@ class GridPainter extends CustomPainter {
 
     canvas.drawCircle(Offset(cx, cy), glowRadius, radialGlow);
 
-    // ── 2. Concentric Sonar Pulse Rings (Radiating from Atlas Logo Center) ─
-    final ringPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.95;
-
-    for (int r = 1; r <= 3; r++) {
-      final ringRadius = (150.0 * r + (progress * 55.0)) % 520.0;
-      final opacity = (1.0 - (ringRadius / 520.0)).clamp(0.0, 0.28);
-
-      ringPaint.color = const Color(0xFF06B6D4).withOpacity(opacity);
-      canvas.drawCircle(Offset(cx, cy), ringRadius, ringPaint);
-    }
-
     // ── 3. Neural Constellation Particle Connections ───────────────
     final linePaint = Paint()..strokeWidth = 0.65;
 

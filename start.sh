@@ -11,13 +11,13 @@ pkill -f uvicorn 2>/dev/null || true
 echo "🤖 Ollama kontrol ediliyor..."
 if ! pgrep -x "ollama" > /dev/null; then
     echo "Ollama başlatılıyor..."
-    ollama serve &
-    sleep 2
+    ollama serve >/dev/null 2>&1 &
+    sleep 3
 fi
 
 # Model var mı kontrol et
 MODEL="qwen2.5:1.5b"
-if ! ollama list | grep -q "$MODEL"; then
+if ! ollama list 2>/dev/null | grep -q "$MODEL"; then
     echo "📥 $MODEL indiriliyor (bu biraz sürebilir)..."
     ollama pull $MODEL
 fi
@@ -51,7 +51,9 @@ cd "$FRONTEND_DIR"
 
 echo "📱 Flutter uygulaması başlatılıyor..."
 flutter pub get
-flutter run -d macos
+
+# Keep stdin alive so flutter run doesn't exit on EOF
+tail -f /dev/null | flutter run -d macos
 
 # Temizlik
 kill $BACKEND_PID 2>/dev/null

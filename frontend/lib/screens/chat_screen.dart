@@ -29,6 +29,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Offset? _globalMousePosition;
   Offset? _avatarCenterOffset;
   bool _handsFreeActive = true;
+  bool _continuousVoiceActive = false;
   bool _showDrawerLogs = false;
   bool _showChatHistory = false;
 
@@ -60,7 +61,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       await atlas.connect();
       await voice.initialize();
 
-      // Listen to token stream for live background terminal log
+      // Forward Llama LLM tokens to live terminal stream view
       atlas.tokenStream.listen((token) {
         if (mounted && _terminalLogs.length < 250) {
           setState(() {
@@ -77,6 +78,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       atlas.addListener(() {
         if (atlas.isWakeWordActive && !voice.isListening && !voice.isSpeaking && !atlas.isStreaming) {
           _addLog('🎯 BACKEND WAKE WORD DETECTED ("Hey Atlas")');
+          _continuousVoiceActive = true;
           _triggerListening(atlas, voice);
         }
       });
@@ -114,17 +116,26 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     });
   }
 
-  /// Mikrofon sadece kullanıcı "Hey Atlas" dediğinde veya mikrofon ikonuna tıkladığında açılır
+  /// Mikrofonu başlatır ve gelen ses sonucunu iletir
   Future<void> _triggerListening(AtlasService atlas, VoiceService voice) async {
-    if (voice.isListening || voice.isSpeaking || atlas.isStreaming) return;
-
-    _addLog('Mikrofon aktif: Konuşmanız dinleniyor...');
-    await voice.startListening(onResult: (text) async {
-      if (text.trim().isEmpty) return;
-
-      _addLog('SES ALGILANDI (STT): "$text"');
+    if (voice.isSpeaking) {
       await voice.stopSpeaking();
-      await atlas.sendMessage(text);
+    }
+    if (atlas.isStreaming) return;
+
+    _addLog('🎤 Mikrofon aktif: Konuşmanız dinleniyor...');
+    await voice.startListening(onResult: (text) async {
+      if (!mounted) return;
+
+      final cleanText = text.trim();
+      if (cleanText.isEmpty) {
+        _addLog('🎙️ Ses algılanamadı / Sessizlik.');
+        return;
+      }
+
+      _addLog('🎯 SES ALGILANDI (STT): "$cleanText"');
+      await voice.stopSpeaking();
+      await atlas.sendMessage(cleanText);
 
       _waitAndSpeakResponse(atlas, voice);
     });
@@ -152,13 +163,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       await Future.delayed(const Duration(milliseconds: 150));
     }
 
-    await Future.delayed(const Duration(milliseconds: 200));
+    await Future.delayed(const Duration(milliseconds: 100));
     if (atlas.messages.isNotEmpty && mounted) {
       final last = atlas.messages.last;
       if (last.role == MessageRole.atlas && last.text.isNotEmpty) {
         _addLog('ATLAS SPEAKING: "${last.text.substring(0, min(50, last.text.length))}..."');
         await voice.speak(last.text);
-        // Returns to Standby mode (MİKROFON: BEKLEMEDE)
       }
     }
   }
@@ -172,14 +182,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           body: MouseRegion(
             hitTestBehavior: HitTestBehavior.translucent,
             onHover: (e) {
-              setState(() {
-                _globalMousePosition = e.localPosition;
-              });
+              _globalMousePosition = e.localPosition;
             },
             onExit: (_) {
-              setState(() {
-                _globalMousePosition = null;
-              });
+              _globalMousePosition = null;
             },
             child: Stack(
               children: [
@@ -213,32 +219,45 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              // Holographic Audio Avatar Core (Click to speak / silence)
-                              GestureDetector(
-                                onTap: () {
-                                  if (voice.isSpeaking) {
-                                    // Konuşuyorsa sus
-                                    voice.stopSpeaking();
-                                    _addLog('> [USER] Atlas susturuldu.');
-                                  } else if (voice.isListening) {
-                                    voice.stopListening();
-                                  } else {
+                              // Holographic Audio Avatar Core (Click or Hold to speak)
+                              Tooltip(
+                                message: voice.isSpeaking
+                                    ? 'Susturmak için tıklayın'
+                                    : voice.isListening
+                                        ? 'Bırakın/Tıklayın dinlemeyi durdurun'
+                                        : 'Basılı tutun veya tıklayın (Sesli Asistan)',
+                                child: AtlasAvatar(
+                                  key: _avatarKey,
+                                  isSpeaking: voice.isSpeaking || atlas.isStreaming,
+                                  isListening: voice.isListening,
+                                  soundLevel: voice.soundLevel,
+                                  size: 240,
+                                  onTap: () {
+                                    if (voice.isSpeaking) {
+                                      voice.stopSpeaking();
+                                      _addLog('> [USER] Atlas konuşması kesildi.');
+                                      return;
+                                    }
+                                    if (voice.isListening) {
+                                      setState(() => _continuousVoiceActive = false);
+                                      voice.stopListening();
+                                      _addLog('> [USER] Dinleme kapatıldı.');
+                                    } else {
+                                      setState(() => _continuousVoiceActive = true);
+                                      _addLog('> [USER] Sesli dinleme başlatıldı.');
+                                      _triggerListening(atlas, voice);
+                                    }
+                                  },
+                                  onLongPressStart: (_) {
+                                    _addLog('> [USER] Logoya basıldı: Anlık mikrofon açılıyor...');
+                                    if (voice.isSpeaking) voice.stopSpeaking();
                                     _triggerListening(atlas, voice);
-                                  }
-                                },
-                                child: Tooltip(
-                                  message: voice.isSpeaking
-                                      ? 'Susturmak için tıklayın'
-                                      : voice.isListening
-                                          ? 'Dinlemeyi durdurmak için tıklayın'
-                                          : 'Konuşmak için tıklayın',
-                                  child: AtlasAvatar(
-                                    key: _avatarKey,
-                                    isSpeaking: voice.isSpeaking || atlas.isStreaming,
-                                    isListening: voice.isListening,
-                                    soundLevel: voice.soundLevel,
-                                    size: 240,
-                                  ),
+                                  },
+                                  onLongPressEnd: (_) {
+                                    _addLog('> [USER] Logo bırakıldı: Mikrofon kapatılıyor...');
+                                    setState(() => _continuousVoiceActive = false);
+                                    voice.stopListening();
+                                  },
                                 ),
                               )
                                   .animate()
@@ -523,21 +542,27 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   // ─── 2. Ambient Voice Status Banner ─────────────────────────────────
   Widget _buildVoiceStatusBanner(AtlasService atlas, VoiceService voice) {
-    String mainText = 'Konuşmak İçin Logoya Tıklayın';
-    String subText = 'Mikrofon kapalıdır. Tıkladığınızda 1 soru için açılır.';
+    String mainText = 'Kesintisiz Sohbet İçin Logoya Tıklayın';
+    String subText = 'Tıkladığınızda mikrofon siz kapatana kadar açık kalır.';
     Color mainColor = AtlasColors.neonCyan;
 
     if (voice.isListening) {
-      mainText = 'Seni Dinliyorum...';
-      subText = 'Sesiniz algılanıyor';
+      mainText = '🔴 Seni Dinliyorum...';
+      subText = voice.lastWords.isNotEmpty
+          ? '«${voice.lastWords}»'
+          : (_continuousVoiceActive
+              ? 'Konuşun ve bitince susun (Susunca otomatik cevap verir)'
+              : 'Sesiniz algılanıyor...');
       mainColor = AtlasColors.neonGreen;
     } else if (voice.isSpeaking) {
-      mainText = 'Atlas Cevap Veriyor...';
-      subText = 'Sesli yanıt veriliyor';
+      mainText = '🔊 Atlas Konuşuyor...';
+      subText = _continuousVoiceActive
+          ? 'Konuşma bitince tekrar dinlemeye geçecek'
+          : 'Sesli yanıt veriliyor';
       mainColor = AtlasColors.neonPurple;
     } else if (atlas.isStreaming) {
-      mainText = 'Düşünüyorum...';
-      subText = 'Nöral model yanıt üretiyor';
+      mainText = '⚡ Atlas Düşünüyor...';
+      subText = 'Gelişmiş nöral model yanıt üretiyor...';
       mainColor = AtlasColors.neonPink;
     }
 
@@ -565,9 +590,15 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         const SizedBox(height: 6),
         Text(
           subText,
+          textAlign: TextAlign.center,
           style: TextStyle(
-            color: AtlasColors.textSecondary,
-            fontSize: 12,
+            color: voice.isListening && voice.lastWords.isNotEmpty
+                ? AtlasColors.neonGreen
+                : AtlasColors.textSecondary,
+            fontSize: 13,
+            fontWeight: voice.isListening && voice.lastWords.isNotEmpty
+                ? FontWeight.bold
+                : FontWeight.normal,
             fontFamily: 'monospace',
           ),
         ),
@@ -585,11 +616,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: List.generate(16, (i) {
-              final baseVal = sin((i / 16) * pi) * 0.8 + 0.2;
+              final baseVal = sin((i / 16) * pi) * 0.85 + 0.15;
+              final voiceAmplifier = (voice.soundLevel * 2.2).clamp(0.0, 1.0);
               final dynamicFactor = voice.isListening
-                  ? max(0.2, voice.soundLevel * 1.8 * (0.5 + 0.5 * sin(_waveCtrl.value * pi * 2 + i)))
-                  : (0.15 + 0.15 * sin(_waveCtrl.value * pi * 2 + i * 0.4));
-              final barHeight = (24.0 * baseVal * dynamicFactor).clamp(4.0, 26.0);
+                  ? (0.12 + voiceAmplifier * 0.88) * (0.65 + 0.35 * sin(_waveCtrl.value * pi * 3 + i))
+                  : (0.10 + 0.10 * sin(_waveCtrl.value * pi * 2 + i * 0.4));
+              final barHeight = (36.0 * baseVal * dynamicFactor).clamp(4.0, 36.0);
 
               return Container(
                 width: 3.5,

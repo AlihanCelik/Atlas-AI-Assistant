@@ -3,7 +3,7 @@ import FlutterMacOS
 import AVFoundation
 import Speech
 
-class MainFlutterWindow: NSWindow {
+class MainFlutterWindow: NSWindow, AVSpeechSynthesizerDelegate {
 
   private var recognizer: SFSpeechRecognizer?
   private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -22,6 +22,8 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+
+    avSynth.delegate = self
 
     let messenger = flutterViewController.engine.binaryMessenger
     voiceChannel = FlutterMethodChannel(
@@ -54,63 +56,140 @@ class MainFlutterWindow: NSWindow {
     super.awakeFromNib()
   }
 
+  // ─── AVSpeechSynthesizerDelegate Callbacks ─────────────────────────
+  func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+    DispatchQueue.main.async { [weak self] in
+      self?.voiceChannel?.invokeMethod("onSpeakFinished", arguments: nil)
+    }
+  }
+
+  func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+    DispatchQueue.main.async { [weak self] in
+      self?.voiceChannel?.invokeMethod("onSpeakFinished", arguments: nil)
+    }
+  }
+
   // ─── Safe Permission Request ─────────────────────────────────────
   private func requestPermissions(result: @escaping FlutterResult) {
     DispatchQueue.main.async {
       let status = AVCaptureDevice.authorizationStatus(for: .audio)
       if status == .notDetermined {
-        AVCaptureDevice.requestAccess(for: .audio) { _ in
-          DispatchQueue.main.async {
-            result("authorized")
-          }
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+          print("[NativeSpeech] Audio permission request result: \(granted)")
         }
-      } else {
-        result("authorized")
       }
+
+      let speechStatus = SFSpeechRecognizer.authorizationStatus()
+      if speechStatus == .notDetermined {
+        SFSpeechRecognizer.requestAuthorization { authStatus in
+          print("[NativeSpeech] Speech recognition auth status: \(authStatus.rawValue)")
+        }
+      }
+
+      result("authorized")
     }
   }
 
-  // ─── Thread-Safe & Clean CoreAudio Fresh-Engine macOS STT ─────────
-  private func startListening(result: @escaping FlutterResult) {
-    DispatchQueue.main.async { [weak self] in
-      guard let self = self else { return }
-      self.stopListeningNow()
-      self.lastPartialText = ""
+  // ─── Thread-Safe & Clean CoreAudio Persistent-Engine macOS STT ────
+  private var speechWorkItemIndex: Int = 0
+  private var isListening = false
 
+  private func ensureAudioEngineRunning() {
+    if audioEngine == nil {
       let engine = AVAudioEngine()
       self.audioEngine = engine
 
-      guard let rec = SFSpeechRecognizer(locale: Locale(identifier: "tr-TR")) ?? SFSpeechRecognizer() else {
-        print("[NativeSpeech] SFSpeechRecognizer unavailable.")
-        result("")
+      // 1. Prepare engine FIRST so inputNode resolves valid hardware format
+      engine.prepare()
+
+      let inputNode = engine.inputNode
+      let format = inputNode.outputFormat(forBus: 0)
+      print("[NativeSpeech] Input node format: \(format.sampleRate) Hz, \(format.channelCount) channels")
+
+      inputNode.removeTap(onBus: 0)
+      inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buf, _ in
+        guard let self = self else { return }
+        if self.isListening {
+          self.recognitionRequest?.append(buf)
+
+          // Real-time Audio RMS Sound Level Metering
+          if let channelData = buf.floatChannelData?[0] {
+            let frameCount = Int(buf.frameLength)
+            if frameCount > 0 {
+              var sum: Float = 0
+              for i in 0..<frameCount {
+                let sample = channelData[i]
+                sum += sample * sample
+              }
+              let rms = sqrt(sum / Float(frameCount))
+              let level = min(max(Double(rms * 30.0), 0.0), 1.0)
+
+              DispatchQueue.main.async {
+                self.voiceChannel?.invokeMethod("onSoundLevel", arguments: level)
+              }
+            }
+          }
+        }
+      }
+
+      do {
+        try engine.start()
+        print("[NativeSpeech] Persistent AudioEngine started successfully.")
+      } catch {
+        print("[NativeSpeech] AudioEngine start failed: \(error)")
+      }
+    } else if let engine = audioEngine, !engine.isRunning {
+      try? engine.start()
+    }
+  }
+
+  private func startListening(result: @escaping FlutterResult) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+
+      self.lastPartialText = ""
+      self.speechWorkItemIndex += 1
+      let localWorkIndex = self.speechWorkItemIndex
+
+      let audioStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+      if audioStatus != .authorized && audioStatus != .notDetermined {
+        print("[NativeSpeech] Audio permission not granted (\(audioStatus.rawValue)).")
+        result(false)
         return
       }
-      self.recognizer = rec
+
+      // 1. Ensure Persistent Audio Engine is running
+      self.ensureAudioEngineRunning()
+
+      // 2. Clean up previous recognition request/task without destroying hardware mic engine
+      self.recognitionRequest?.endAudio()
+      self.recognitionTask?.cancel()
+      self.recognitionTask = nil
+      self.recognitionRequest = nil
+
+      let supportedLocales = SFSpeechRecognizer.supportedLocales()
+      let trLocale = supportedLocales.first(where: { $0.identifier.contains("tr") }) ?? Locale(identifier: "tr-TR")
+      let rec = SFSpeechRecognizer(locale: trLocale) ?? SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer()
+      guard let recognizer = rec else {
+        print("[NativeSpeech] SFSpeechRecognizer unavailable.")
+        self.voiceChannel?.invokeMethod("onError", arguments: "Speech recognizer unavailable")
+        result(false)
+        return
+      }
+      if !recognizer.isAvailable {
+        print("[NativeSpeech] Warning: SFSpeechRecognizer.isAvailable is false. Proceeding with task creation.")
+      }
+      self.recognizer = recognizer
 
       let req = SFSpeechAudioBufferRecognitionRequest()
       req.shouldReportPartialResults = true
+      req.requiresOnDeviceRecognition = false
+      req.taskHint = .dictation
       self.recognitionRequest = req
+      self.isListening = true
 
-      let inputNode = engine.inputNode
-      inputNode.removeTap(onBus: 0)
-
-      inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak req] buf, _ in
-        req?.append(buf)
-      }
-
-      engine.prepare()
-      do {
-        try engine.start()
-        print("[NativeSpeech] AudioEngine started successfully.")
-      } catch {
-        print("[NativeSpeech] AudioEngine start failed: \(error)")
-        result("")
-        return
-      }
-
-      self.activeResult = result
-
-      self.recognitionTask = rec.recognitionTask(with: req) { [weak self] res, err in
+      // 3. Attach Recognition Task
+      self.recognitionTask = recognizer.recognitionTask(with: req) { [weak self] res, err in
         guard let self = self else { return }
 
         if let res = res {
@@ -118,22 +197,21 @@ class MainFlutterWindow: NSWindow {
           if !text.isEmpty {
             self.lastPartialText = text
             print("[NativeSpeech] STT Partial: \(text)")
-            
+
             DispatchQueue.main.async {
               self.voiceChannel?.invokeMethod("onResult", arguments: ["text": text, "final": false])
 
-              // 1.2s Silence Auto-Commit Timer
-              self.silenceTimer?.invalidate()
-              self.silenceTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
-                DispatchQueue.main.async {
-                  guard let self = self else { return }
-                  print("[NativeSpeech] Silence timeout - auto committing: \(self.lastPartialText)")
+              // Silence Auto-Commit timer
+              self.speechWorkItemIndex += 1
+              let silenceIndex = self.speechWorkItemIndex
+
+              DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                guard let self = self else { return }
+                if self.isListening && self.speechWorkItemIndex == silenceIndex && !self.lastPartialText.isEmpty {
+                  print("[NativeSpeech] Silence auto-commit: \(self.lastPartialText)")
                   let finalText = self.lastPartialText
-                  self.stopListeningNow()
-                  if let act = self.activeResult {
-                    act(finalText)
-                    self.activeResult = nil
-                  }
+                  self.isListening = false
+                  self.voiceChannel?.invokeMethod("onResult", arguments: ["text": finalText, "final": true])
                 }
               }
             }
@@ -141,52 +219,46 @@ class MainFlutterWindow: NSWindow {
 
           if res.isFinal {
             DispatchQueue.main.async {
-              self.silenceTimer?.invalidate()
               let finalText = self.lastPartialText
-              self.stopListeningNow()
-              if let act = self.activeResult {
-                act(finalText)
-                self.activeResult = nil
-              }
+              self.isListening = false
+              self.voiceChannel?.invokeMethod("onResult", arguments: ["text": finalText, "final": true])
             }
           }
         }
 
-        if let _ = err {
+        if let err = err {
+          print("[NativeSpeech] STT Task ended: \(err.localizedDescription)")
           DispatchQueue.main.async {
-            self.silenceTimer?.invalidate()
-            let text = self.lastPartialText
-            print("[NativeSpeech] STT Ended with text: \(text)")
-            self.stopListeningNow()
-            if let act = self.activeResult {
-              act(text)
-              self.activeResult = nil
+            if self.isListening && self.speechWorkItemIndex == localWorkIndex {
+              let text = self.lastPartialText
+              self.isListening = false
+              self.voiceChannel?.invokeMethod("onResult", arguments: ["text": text, "final": true])
             }
           }
         }
       }
+
+      // Non-blocking method call response
+      result(true)
     }
   }
 
   private func stopListeningNow() {
-    silenceTimer?.invalidate()
-    silenceTimer = nil
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+      self.isListening = false
+      self.speechWorkItemIndex += 1
 
-    if let engine = audioEngine {
-      if engine.isRunning {
-        engine.stop()
-      }
-      if engine.inputNode.numberOfInputs > 0 {
-        engine.inputNode.removeTap(onBus: 0)
-      }
-      engine.reset()
+      self.recognitionRequest?.endAudio()
+      self.recognitionTask?.finish()
+      self.recognitionTask = nil
+      self.recognitionRequest = nil
+
+      // Send final status update to Flutter
+      let finalText = self.lastPartialText
+      self.voiceChannel?.invokeMethod("onResult", arguments: ["text": finalText, "final": true])
+      self.voiceChannel?.invokeMethod("onSoundLevel", arguments: 0.0)
     }
-    audioEngine = nil
-
-    recognitionRequest?.endAudio()
-    recognitionTask?.cancel()
-    recognitionTask = nil
-    recognitionRequest = nil
   }
 
   // ─── Modern High-Quality Speech Synthesizer ─────────────────────
@@ -198,7 +270,7 @@ class MainFlutterWindow: NSWindow {
       }
 
       let utterance = AVSpeechUtterance(string: text)
-      
+
       let trVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.contains("tr") }
       if let bestVoice = trVoices.first {
         utterance.voice = bestVoice
@@ -206,7 +278,7 @@ class MainFlutterWindow: NSWindow {
         utterance.voice = AVSpeechSynthesisVoice(language: "tr-TR")
       }
 
-      utterance.rate = 0.51
+      utterance.rate = 0.52
       utterance.pitchMultiplier = 1.02
       utterance.volume = 1.0
 

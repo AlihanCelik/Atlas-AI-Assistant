@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -14,6 +15,7 @@ class VoiceService extends ChangeNotifier {
   bool _initialized = false;
   double _soundLevel = 0.0;
   String _lastWords = '';
+  Completer<void>? _speakCompleter;
 
   bool get isListening => _isListening;
   bool get isSpeaking => _isSpeaking;
@@ -48,6 +50,8 @@ class VoiceService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void Function(String)? _onResultCallback;
+
   Future<void> _handleNativeCall(MethodCall call) async {
     switch (call.method) {
       case 'onResult':
@@ -59,6 +63,11 @@ class VoiceService extends ChangeNotifier {
           if (isFinal) {
             _isListening = false;
             _soundLevel = 0.0;
+            final cb = _onResultCallback;
+            _onResultCallback = null;
+            if (cb != null) {
+              cb(text);
+            }
           }
           notifyListeners();
         }
@@ -70,71 +79,55 @@ class VoiceService extends ChangeNotifier {
         notifyListeners();
         break;
 
+      case 'onSpeakFinished':
+        _isSpeaking = false;
+        if (_speakCompleter != null && !_speakCompleter!.isCompleted) {
+          _speakCompleter!.complete();
+        }
+        notifyListeners();
+        break;
+
       case 'onError':
         debugPrint('[Voice] STT hata: ${call.arguments}');
         _isListening = false;
         _soundLevel = 0.0;
+        _onResultCallback = null;
         notifyListeners();
         break;
     }
   }
 
   // ─── Dinlemeye Başla ──────────────────────────────────────────
-  Future<void> startListening({required Function(String) onResult}) async {
+  Future<void> startListening({required void Function(String) onResult}) async {
     if (!_permissionGranted) {
       await initialize();
     }
-    if (_isListening) return;
+    if (_isListening) {
+      await stopListening();
+    }
 
     _lastWords = '';
     _isListening = true;
-    _soundLevel = 0.6;
+    _soundLevel = 0.2;
+    _onResultCallback = onResult;
     notifyListeners();
 
-    debugPrint('[Voice] Dinleme başladı');
+    debugPrint('[Voice] Dinleme anında başladı');
 
     try {
-      final result = await _channel.invokeMethod<String>('startListening');
-      debugPrint('[Voice] Native STT Sonucu: "$result"');
-
-      if (result != null && result.isNotEmpty) {
-        _lastWords = result;
-        _isListening = false;
-        _soundLevel = 0.0;
-        notifyListeners();
-        onResult(result);
-        return;
-      }
-
-      // Native STT empty -> Use Backend Python STT Fallback
-      debugPrint('[Voice] Native STT boş döndü, Backend Türkçe STT çağrılıyor...');
-      final response = await http.post(Uri.parse('http://localhost:8000/api/stt')).timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => http.Response('{"text":""}', 200),
-      );
-
-      _isListening = false;
-      _soundLevel = 0.0;
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final sttText = data['text'] as String? ?? '';
-        debugPrint('[Voice] Backend STT Sonucu: "$sttText"');
-        if (sttText.isNotEmpty) {
-          _lastWords = sttText;
-          onResult(sttText);
-        }
-      }
-      notifyListeners();
+      await _channel.invokeMethod('startListening');
     } catch (e) {
-      debugPrint('[Voice] Dinleme hatası: $e');
+      debugPrint('[Voice] Dinleme başlatma hatası: $e');
       _isListening = false;
       _soundLevel = 0.0;
+      _onResultCallback = null;
       notifyListeners();
+      onResult('');
     }
   }
 
   Future<void> stopListening() async {
+    _onResultCallback = null;
     try {
       await _channel.invokeMethod('stopListening');
     } catch (_) {}
@@ -152,13 +145,20 @@ class VoiceService extends ChangeNotifier {
     _isSpeaking = true;
     notifyListeners();
 
+    _speakCompleter = Completer<void>();
+
     try {
       await _channel.invokeMethod('speak', clean);
-      // NSSpeechSynthesizer async çalışır, bitmesini takip edemeyiz
-      // Yaklaşık süre hesapla
+      // Wait for native didFinish callback with length-based fallback timeout
       final words = clean.split(' ').length;
-      final durationMs = (words / 2.5 * 1000).toInt().clamp(1000, 30000);
-      await Future.delayed(Duration(milliseconds: durationMs));
+      final maxDurationMs = (words / 1.5 * 1000).toInt().clamp(2000, 45000);
+
+      await _speakCompleter!.future.timeout(
+        Duration(milliseconds: maxDurationMs),
+        onTimeout: () {
+          debugPrint('[Voice] TTS speak timeout fallback');
+        },
+      );
     } catch (e) {
       debugPrint('[Voice] TTS hatası: $e');
     }
@@ -172,6 +172,9 @@ class VoiceService extends ChangeNotifier {
       await _channel.invokeMethod('stopSpeaking');
     } catch (_) {}
     _isSpeaking = false;
+    if (_speakCompleter != null && !_speakCompleter!.isCompleted) {
+      _speakCompleter!.complete();
+    }
     notifyListeners();
   }
 

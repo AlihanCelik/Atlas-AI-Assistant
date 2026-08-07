@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 /// Interactive Matrix & Computer Code Rain painter reacting to mouse cursor movement
 class CodeRainPainter extends CustomPainter {
@@ -133,7 +134,8 @@ class CodeRainWidget extends StatefulWidget {
 
 class _CodeRainWidgetState extends State<CodeRainWidget>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
+  late Ticker _ticker;
+  final Stopwatch _stopwatch = Stopwatch();
   late List<_CodeColumn> _columns;
   final _random = Random();
   Offset? _mousePosition;
@@ -182,10 +184,10 @@ class _CodeRainWidgetState extends State<CodeRainWidget>
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 25),
-    )..repeat();
+    _stopwatch.start();
+    _ticker = createTicker((_) {
+      if (mounted) setState(() {});
+    })..start();
 
     _generateColumns();
   }
@@ -221,39 +223,34 @@ class _CodeRainWidgetState extends State<CodeRainWidget>
 
   @override
   void dispose() {
-    _controller.dispose();
+    _ticker.dispose();
+    _stopwatch.stop();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final activeMousePos = widget.mousePosition ?? _mousePosition;
+    final elapsedSec = _stopwatch.elapsedMilliseconds / 1000.0;
 
     return MouseRegion(
       onHover: (event) {
         if (widget.mousePosition == null) {
-          setState(() {
-            _mousePosition = event.localPosition;
-          });
+          _mousePosition = event.localPosition;
         }
       },
       onExit: (_) {
         if (widget.mousePosition == null) {
-          setState(() {
-            _mousePosition = null;
-          });
+          _mousePosition = null;
         }
       },
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (_, __) => CustomPaint(
-          painter: CodeRainPainter(
-            progress: _controller.value,
-            columns: _columns,
-            mousePosition: activeMousePos,
-          ),
-          child: widget.child,
+      child: CustomPaint(
+        painter: CodeRainPainter(
+          progress: elapsedSec * 0.04,
+          columns: _columns,
+          mousePosition: activeMousePos,
         ),
+        child: widget.child,
       ),
     );
   }

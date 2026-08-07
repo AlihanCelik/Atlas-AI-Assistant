@@ -236,26 +236,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.post("/api/stt")
 def speech_to_text_fallback():
-    """Yedek Türkçe Ses Tanıma Endpoint'i (sounddevice + speech_recognition)"""
-    try:
-        import sounddevice as sd
-        import speech_recognition as sr
-
-        sample_rate = 16000
-        duration = 3.5
-        print("[STT-API] 🎙️ Türkçe ses dinleniyor (3.5 sn)...")
-        audio_data = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='int16')
-        sd.wait()
-        raw_bytes = audio_data.tobytes()
-        audio = sr.AudioData(raw_bytes, sample_rate, 2)
-
-        recognizer = sr.Recognizer()
-        text = recognizer.recognize_google(audio, language="tr-TR")
-        print(f"[STT-API] 🎯 Algılanan Türkçe Metin: {text}")
-        return {"text": text}
-    except Exception as e:
-        print(f"[STT-API] Ses algılanamadı veya hata: {e}")
-        return {"text": ""}
+    """STT handled natively on client side to preserve hardware CoreAudio sessions."""
+    return {"text": ""}
 
 
 # ─── Çalıştırma ───────────────────────────────────────────────────
